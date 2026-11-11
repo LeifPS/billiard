@@ -1,0 +1,22 @@
+{
+  "name": "billiard",
+  "description": "Billiard (8-Ball, 9-Ball) für den Leif Game Hub",
+  "scripts": {
+    "test": "node tests/rules.test.mjs",
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/LeifPS/billiard.git"
+  },
+  "bugs": {
+    "url": "https://github.com/LeifPS/billiard/issues"
+  },
+  "homepage": "https://github.com/LeifPS/billiard#readme",
+  "type": "module",
+  "private": true,
+  "devDependencies": {
+    "wrangler": "^4"
+  }
+}
