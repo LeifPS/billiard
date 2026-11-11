@@ -65,7 +65,7 @@ export class Scene3D {
     this.buildBalls(16);
     this.buildGuides(); this.buildCue();
     this.cos = null;
-    this.trail = { items: [], n: 0, geo: new THREE.CircleGeometry(1.0, 12).rotateX(-Math.PI / 2), last: 0 };
+    this.trail = { items: [], n: 0, geo: new THREE.CircleGeometry(1.5, 14).rotateX(-Math.PI / 2), last: 0 };
     for (let i = 0; i < 90; i++) { const m = new THREE.Mesh(this.trail.geo, new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0, depthWrite: false })); m.visible = false; m.position.y = R * 2 + 0.3; this.scene.add(m); this.trail.items.push({ m, t0: -9, vx: 0, vz: 0 }); }
     this.setCosmetics({ cloth: 'gruen', frame: 'nuss', balls: 'klassik', cue: 'ahorn', trail: 'keine' });
   }
@@ -81,7 +81,7 @@ export class Scene3D {
   clearTrail() { for (const p of this.trail.items) { p.t0 = -9; p.m.visible = false; } }
   emitTrail(x, y, tNow) {
     const c = find('trail', this.cos.trail); if (!c || !c.col) return;
-    const T = this.trail; if (tNow - T.last < 0.025) return; T.last = tNow;
+    const T = this.trail; if (tNow - T.last < 0.012) return; T.last = tNow;
     const p = T.items[T.n++ % T.items.length];
     p.t0 = tNow; p.m.position.set(x + (Math.random() - 0.5) * 1.2, R * 2 + 0.3, y + (Math.random() - 0.5) * 1.2);
     p.vx = (Math.random() - 0.5) * 6; p.vz = (Math.random() - 0.5) * 6;
@@ -92,7 +92,7 @@ export class Scene3D {
     for (const p of this.trail.items) {
       if (!p.m.visible) continue; const k = (tNow - p.t0) / (p.life || 0.8);
       if (k >= 1) { p.m.visible = false; continue; }
-      p.m.material.opacity = 0.8 * (1 - k); p.m.scale.setScalar(1.3 - 0.8 * k); p.m.position.x += p.vx * 0.016; p.m.position.z += p.vz * 0.016;
+      p.m.material.opacity = 0.9 * (1 - k); p.m.scale.setScalar(1.3 - 0.8 * k); p.m.position.x += p.vx * 0.016; p.m.position.z += p.vz * 0.016;
     }
   }
   setOpponentCue(id) { this.applyCue(id || this.cos.cue); }
