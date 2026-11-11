@@ -1,7 +1,7 @@
 // Billiard: Spielablauf, Bedienung und Menüs.
 import { Scene3D } from './render.js';
 import { Game, rng, HEAD_X, FOOT_X, grp } from './rules.js';
-import { R, HX, HY, POCKET_MOUTH, cueShot, aimInfo, FRAME_STEPS, DT } from './physics.js';
+import { R, HX, HY, POCKET_MOUTH, cueShot, aimInfo, predictShot, FRAME_STEPS, DT } from './physics.js';
 import { botShot, botPlace, LEVELS } from './bot.js';
 import { Sfx } from './audio.js';
 import * as Store from './store.js';
@@ -534,9 +534,11 @@ function frame(now) {
   } else if (anim.kind === 'run') {
     const fr = anim.res.st.frames, ev = anim.res.st.events;
     // langsam auslaufende Bewegung beschleunigen
-    let speed = 1; const i0 = Math.min(fr.length - 2, Math.floor(anim.t / FRAME_DT));
-    if (i0 >= 0 && anim.t > 0.8) { let mx = 0; const a = fr[i0], b = fr[i0 + 1]; for (let i = 0; i < 16; i++) if (a[i * 6 + 5]) mx = Math.max(mx, Math.abs(b[i * 6] - a[i * 6]) + Math.abs(b[i * 6 + 1] - a[i * 6 + 1])); const v = mx / FRAME_DT; speed = v < 12 ? 5 : v < 40 ? 3 : v < 90 ? 1.8 : 1; }
-    const step = dt * speed; anim.t += step;
+    // Das Auslaufen wird nur ganz sanft gerafft: die sichtbare Geschwindigkeit nimmt dabei immer weiter ab (nie wieder zu), kein Ruck
+    let target = 1; const i0 = Math.min(fr.length - 2, Math.floor(anim.t / FRAME_DT));
+    if (i0 >= 0 && anim.t > 0.8) { let mx = 0; const a = fr[i0], b = fr[i0 + 1]; for (let i = 0; i < 16; i++) if (a[i * 6 + 5]) mx = Math.max(mx, Math.abs(b[i * 6] - a[i * 6]) + Math.abs(b[i * 6 + 1] - a[i * 6 + 1])); const v = mx / FRAME_DT; target = v >= 90 ? 1 : Math.min(2.6, Math.sqrt(90 / Math.max(v, 1))); }
+    anim.sp = anim.sp || 1; anim.sp += (target - anim.sp) * Math.min(1, dt * 2.5);
+    const step = dt * anim.sp; anim.t += step;
     const tt = anim.t; let i = Math.floor(tt / FRAME_DT); const alpha = tt / FRAME_DT - i;
     while (anim.ev < ev.length && ev[anim.ev].t <= tt) { const e = ev[anim.ev++]; if (e.k === 'ball') sfx.ball(e.s); else if (e.k === 'rail') sfx.rail(e.s); else if (e.k === 'pocket') { sfx.pocket(); } }
     if (i >= fr.length - 1) { anim.kind = 'done'; finishShot(anim); }
@@ -551,6 +553,19 @@ function preSim(a) {
   // Zustand der Kugeln vor dem Stoß = Startbild der Aufzeichnung
   if (!a.pre.sim) { const s = a.res.st.frames[0]; const o = { x: new Float64Array(16), y: new Float64Array(16), on: new Uint8Array(16) }; for (let i = 0; i < 16; i++) { o.x[i] = s[i * 6]; o.y[i] = s[i * 6 + 1]; o.on[i] = s[i * 6 + 5]; } a.pre.sim = o; }
   return a.pre.sim;
+}
+let predKey = '', predVal = null;
+// Zielhilfe: Geometrie + echte Vorausberechnung des Stoßes (Mitnahme, Vor-/Rückdrall), damit die Linien dem Ergebnis entsprechen
+function guideInfo(g, ang, a, b, power) {
+  const s = g.sim, info = aimInfo(s, ang);
+  if (info.hit > 0) {
+    const pw = power > 0.08 ? Math.round(power * 10) / 10 : 0.4;
+    const key = [ang.toFixed(4), a.toFixed(2), b.toFixed(2), pw, s.x[0].toFixed(1), s.y[0].toFixed(1), g.shots, g.rackNo].join();
+    if (key !== predKey) { predKey = key; predVal = predictShot(s, ang, a, b, pw); }
+    const p = predVal;
+    if (p && p.obj === info.hit) Object.assign(info, { ox: p.ox, oy: p.oy, olen: p.olen, cx: p.cx, cy: p.cy, clen: p.clen });
+  }
+  return info;
 }
 function drawAim(now) {
   if (!M || M.over) { scene.setAim(null); return; }
@@ -576,7 +591,7 @@ function drawAim(now) {
     return;
   }
   if (inp.on) {
-    const s = g.sim, info = aimInfo(s, inp.ang);
+    const s = g.sim, info = guideInfo(g, inp.ang, inp.a, inp.b, inp.power);
     scene.setAim({ show: true, sim: s, ang: inp.ang, info, pull: inp.power, spinA: inp.a, spinB: inp.b, guide: S.set.guide, cue: true });
     const hand = g.inHand;
     scene.setHandMark(!!hand, s.x[0], s.y[0], hand ? g.canPlace(s.x[0], s.y[0]) : true);

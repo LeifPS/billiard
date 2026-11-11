@@ -1,6 +1,6 @@
 // 3D-Darstellung (three.js): Tisch von oben, Kugeln, Queue, Zielhilfe. Weltkoordinaten: Simulation (x,y) -> three (x, 0, y).
 import * as THREE from '../vendor/three.module.min.js';
-import { R, HX, HY, POCKET_MOUTH, POCKETS } from './physics.js';
+import { R, HX, HY, POCKET_MOUTH, POCKETS, CK, SK } from './physics.js';
 import { BALL_SETS, find } from './cosmetics.js';
 
 const F = 11;               // Breite von Bande + Holzrahmen
@@ -110,7 +110,6 @@ export class Scene3D {
     // Bandenstücke (Querschnitt: Nase bei u=0, nach außen u)
     const prof = new THREE.Shape(); prof.moveTo(-1.1, 0); prof.lineTo(0, 2.3); prof.lineTo(5, 2.3); prof.lineTo(5, 0); prof.closePath();
     const cushion = (len) => new THREE.ExtrudeGeometry(prof, { depth: len, bevelEnabled: false }).translate(0, 0, -len / 2);
-    const SK = 6.5, CK = 7.5;
     const longLen = HX - CK - SK, shortLen = 2 * (HY - CK);
     for (const sx of [-1, 1]) for (const sz of [-1, 1]) {
       const m = new THREE.Mesh(cushion(longLen), cushMat); // lange Bande: Profil-x nach außen entlang z
@@ -135,7 +134,7 @@ export class Scene3D {
     for (const k of [-1, 0, 1]) for (const sx of [-1, 1]) { const m = new THREE.Mesh(dia, inlay); m.position.set(sx * (HX + inner + (F - inner) / 2), TOP + 0.45, k * HY / 2); g.add(m); }
     // Taschen
     const disc = (r, x, z) => { const m = new THREE.Mesh(new THREE.CircleGeometry(r, 28).rotateX(-Math.PI / 2), dark); m.position.set(x, TOP + 0.05, z); g.add(m); };
-    for (const P of POCKETS) disc(P.r === 6 ? 6.3 : 5.5, P.x * 0.98, P.y * 0.98);
+    for (const P of POCKETS) disc(P.c ? 7.2 : 5.8, P.x * 0.98, P.y * 0.98);
     // Zielzeichen (Fuß- und Kopfpunkt)
     const dot = (x, z) => { const m = new THREE.Mesh(new THREE.CircleGeometry(0.5, 12).rotateX(-Math.PI / 2), new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.35 })); m.position.set(x, 0.02, z); g.add(m); };
     dot(HX / 2, 0); dot(-HX / 2, 0); dot(0, 0);
@@ -286,8 +285,10 @@ export class Scene3D {
     this.strip(this.gAim, cx + i.dx * R, cy + i.dy * R, cx + i.dx * (lenA), cy + i.dy * (lenA), 0.32);
     if (i.hit > 0 && a.guide > 0) {
       this.gGhost.visible = true; this.gGhost.position.set(i.gx, LH, i.gy);
-      this.strip(this.gObj, s.x[i.hit], s.y[i.hit], s.x[i.hit] + i.ox * 26 * (0.6 + 0.4 * (i.cut || 0)) * 1.8, s.y[i.hit] + i.oy * 26 * (0.6 + 0.4 * (i.cut || 0)) * 1.8, 0.32);
-      this.strip(this.gCue, i.gx, i.gy, i.gx + i.cx * 14 * (i.cut || 0) * 2, i.gy + i.cy * 14 * (i.cut || 0) * 2, 0.28);
+      const ol = i.olen != null ? Math.min(95, Math.max(8, i.olen)) : 26 * (0.6 + 0.4 * (i.cut || 0)) * 1.8;
+      const cl = i.clen != null ? (i.clen < 2.5 ? 0 : Math.min(70, i.clen)) : 14 * (i.cut || 0) * 2;
+      this.strip(this.gObj, s.x[i.hit], s.y[i.hit], s.x[i.hit] + i.ox * ol, s.y[i.hit] + i.oy * ol, 0.32);
+      this.strip(this.gCue, i.gx, i.gy, i.gx + i.cx * cl, i.gy + i.cy * cl, 0.28);
       this.targetMark.position.set(s.x[i.hit], LH, s.y[i.hit]); this.targetMark.material.opacity = 0.9;
     } else {
       this.gGhost.visible = i.hit === -1 && false; this.gObj.visible = false; this.gCue.visible = false; this.targetMark.material.opacity = 0;

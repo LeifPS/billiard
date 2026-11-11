@@ -9,20 +9,27 @@ export const DT = 0.001;          // Schrittweite
 export const VMAX = 800;          // größte Anstoßgeschwindigkeit (cm/s)
 export const FRAME_STEPS = 16;    // Aufzeichnung alle 16 ms
 
-const G = 981, MU_S = 0.2, MU_R = 0.02, MU_B = 0.06, MU_C = 0.18, E_B = 0.96;
+const G = 981, MU_S = 0.2, MU_R = 0.013, MU_B = 0.045, MU_C = 0.18, E_B = 0.96;
 const WZ_DAMP = 1 - 0.0007;       // Seitendrall klingt langsam ab
-const V_STOP = 1.2;               // darunter bleibt eine rollende Kugel liegen
+const V_STOP = 0.8;               // darunter bleibt eine rollende Kugel liegen
 
+// Taschen: Eck-Taschenmaul ca. 12,7 cm, Seiten-Taschenmaul ca. 13,6 cm Spitze zu Spitze (Kugel: 5,7 cm) – wie ein echter Tisch
+export const CK = 10.0, SK = 7.2;
 export const POCKETS = [
-  { x: -HX - 2, y: -HY - 2, r: 6.0 }, { x: 0, y: -HY - 2.5, r: 4.6 }, { x: HX + 2, y: -HY - 2, r: 6.0 },
-  { x: -HX - 2, y: HY + 2, r: 6.0 }, { x: 0, y: HY + 2.5, r: 4.6 }, { x: HX + 2, y: HY + 2, r: 6.0 },
+  { x: -HX - 1.5, y: -HY - 1.5, r: 7.4, c: 1 }, { x: 0, y: -HY - 2, r: 5.4, c: 0 }, { x: HX + 1.5, y: -HY - 1.5, r: 7.4, c: 1 },
+  { x: -HX - 1.5, y: HY + 1.5, r: 7.4, c: 1 }, { x: 0, y: HY + 2, r: 5.4, c: 0 }, { x: HX + 1.5, y: HY + 1.5, r: 7.4, c: 1 },
 ];
 // Mittelpunkte der Taschenöffnungen (für die Anzeige; Index wie POCKETS)
 export const POCKET_MOUTH = [
   { x: -HX, y: -HY }, { x: 0, y: -HY }, { x: HX, y: -HY },
   { x: -HX, y: HY }, { x: 0, y: HY }, { x: HX, y: HY },
 ];
-const CK = 7.5, SK = 6.5, RK = R + 1.0;
+// Zielpunkt für saubere Stöße: Mitte des Taschenmauls (nicht die Bandenecke, dort stößt die Kugel an die Taschenkante)
+export const POCKET_AIM = [
+  { x: -(HX - 3.5), y: -(HY - 3.5) }, { x: 0, y: -HY }, { x: HX - 3.5, y: -(HY - 3.5) },
+  { x: -(HX - 3.5), y: HY - 3.5 }, { x: 0, y: HY }, { x: HX - 3.5, y: HY - 3.5 },
+];
+const RK = R + 1.0;
 const KNUCKLES = [];
 for (const sx of [-1, 1]) for (const sy of [-1, 1]) {
   KNUCKLES.push({ x: sx * (HX - CK), y: sy * HY }, { x: sx * HX, y: sy * (HY - CK) }, { x: sx * SK, y: sy * HY });
@@ -115,12 +122,13 @@ export class Sim {
         }
       }
     }
-    // 4) Taschen
+    // 4) Taschen (auch eine Kugel, die schon hinter der Bandenlinie liegt, ist durch das Maul gekommen und fällt)
     for (let i = 0; i < 16; i++) {
       if (!on[i]) continue;
+      const past = Math.abs(x[i]) > HX + 0.5 || Math.abs(y[i]) > HY + 0.5;
       for (let p = 0; p < 6; p++) {
         const P = POCKETS[p], dx = x[i] - P.x, dy = y[i] - P.y;
-        if (dx * dx + dy * dy < P.r * P.r) {
+        if (dx * dx + dy * dy < P.r * P.r || (past && (x[i] * P.x >= 0 || P.x === 0) && (y[i] * P.y >= 0) && dx * dx + dy * dy < 20 * 20)) {
           if (st) { st.pocketed.push({ b: i, p, t: this.t }); st.events.push({ k: 'pocket', t: this.t, a: i, p, s: Math.sqrt(vx[i] * vx[i] + vy[i] * vy[i]) }); }
           this.remove(i);
           break;
@@ -164,10 +172,16 @@ export class Sim {
 
   ballHit(i, j, dx, dy, d2, st) {
     const x = this.x, y = this.y, vx = this.vx, vy = this.vy, wz = this.wz;
-    const d = d2 > 0 ? Math.sqrt(d2) : 1e-9;
-    const nx = d2 > 0 ? dx / d : 1, ny = d2 > 0 ? dy / d : 0;
-    const over = 2 * R - d;
-    x[i] -= nx * over * 0.5; y[i] -= ny * over * 0.5; x[j] += nx * over * 0.5; y[j] += ny * over * 0.5;
+    // Genauer Berührungszeitpunkt: die Kugeln stecken schon bis zu einem Schritt ineinander. Wir rechnen zurück bis zur
+    // Berührung, stoßen dort (richtige Stoßrichtung, auch bei schnellen Stößen) und laufen den Rest des Schritts weiter.
+    const rvx = vx[i] - vx[j], rvy = vy[i] - vy[j], bq = dx * rvx + dy * rvy, aq = rvx * rvx + rvy * rvy;
+    const vix = vx[i], viy = vy[i], vjx = vx[j], vjy = vy[j];
+    let tau = 0;
+    if (aq > 1e-9 && bq > 0) { const disc = bq * bq - aq * (d2 - 4 * R * R); if (disc >= 0) tau = (-bq + Math.sqrt(disc)) / aq; if (!(tau > 0)) tau = 0; if (tau > 2 * DT) tau = 2 * DT; }
+    let ex = dx + rvx * tau, ey = dy + rvy * tau; const el2 = ex * ex + ey * ey;
+    const d = el2 > 0 ? Math.sqrt(el2) : 1e-9;
+    const nx = el2 > 0 ? ex / d : 1, ny = el2 > 0 ? ey / d : 0;
+    if (tau === 0) { const over = 2 * R - d; x[i] -= nx * over * 0.5; y[i] -= ny * over * 0.5; x[j] += nx * over * 0.5; y[j] += ny * over * 0.5; }
     const c = (vx[i] - vx[j]) * nx + (vy[i] - vy[j]) * ny; // Annäherungsgeschwindigkeit
     if (c <= 0) return;
     const jn = (1 + E_B) * c * 0.5;
@@ -179,6 +193,11 @@ export class Sim {
     if (jt > lim) jt = lim; else if (jt < -lim) jt = -lim;
     vx[i] += jt * tx; vy[i] += jt * ty; vx[j] -= jt * tx; vy[j] -= jt * ty;
     wz[i] += 2.5 * jt / R; wz[j] += 2.5 * jt / R;
+    if (tau > 0) {
+      x[i] += (vx[i] - vix) * tau; y[i] += (vy[i] - viy) * tau; x[j] += (vx[j] - vjx) * tau; y[j] += (vy[j] - vjy) * tau;
+      const fx = x[j] - x[i], fy = y[j] - y[i], fd2 = fx * fx + fy * fy;
+      if (fd2 < 4 * R * R && fd2 > 0) { const fd = Math.sqrt(fd2), o2 = (2 * R - fd) * 0.5; x[i] -= fx / fd * o2; y[i] -= fy / fd * o2; x[j] += fx / fd * o2; y[j] += fy / fd * o2; }
+    }
     if (st) {
       if (c > 1.5) {
         st.events.push({ k: 'ball', t: this.t, a: i, b: j, s: c });
@@ -261,4 +280,36 @@ export function aimInfo(sim, angle) {
     out.cx = tl > 1e-6 ? tx / tl : 0; out.cy = tl > 1e-6 ? ty / tl : 0; out.cut = tl;
   }
   return out;
+}
+
+// Vorausberechnung des echten Stoßes bis kurz nach dem ersten Kontakt (für die Zielhilfe): zeigt Mitnahme (Throw),
+// Vor-/Rückdrall und Treffpunkt genauso, wie sie dann wirklich ablaufen. Gibt null zurück, wenn die Weiße vorher an die Bande läuft.
+export function predictShot(sim, angle, a, b, power) {
+  const s = sim.clone(); s.apply(cueShot(angle, power, a, b));
+  const st = { events: [], pocketed: [], first: -1, railAfter: false, railMask: 0 };
+  let n = 0, hitN = -1, seen = 0, sx = 0, sy = 0, ox0 = 0, oy0 = 0, obj = -1;
+  const cue = { x: 0, y: 0, on: 1, frozen: false }, ob = { x: 0, y: 0, on: 1, frozen: false };
+  while (n < 3000) {
+    s.step(st); n++;
+    if (hitN < 0) {
+      for (; seen < st.events.length; seen++) if (st.events[seen].k === 'rail' && st.events[seen].a === 0) return null;
+      if (st.first >= 0) { hitN = n; obj = st.first; sx = s.x[0]; sy = s.y[0]; ox0 = s.x[obj]; oy0 = s.y[obj]; cue.x = sx; cue.y = sy; ob.x = ox0; ob.y = oy0; }
+      else if (!s.on[0]) return null;
+      continue;
+    }
+    // Weg nur bis zur nächsten Bande oder Kugel verfolgen (danach ändert sich die Richtung, das gehört nicht mehr zum Stoß)
+    for (; seen < st.events.length; seen++) {
+      const e = st.events[seen];
+      if (e.k === 'rail') { if (e.a === 0) cue.frozen = true; else if (e.a === obj) ob.frozen = true; }
+      else if (e.k === 'ball' && (e.a === 0 || e.b === 0 || e.a === obj || e.b === obj) && !(e.a === 0 && e.b === obj) && !(e.a === obj && e.b === 0)) { if (e.a === 0 || e.b === 0) cue.frozen = true; if (e.a === obj || e.b === obj) ob.frozen = true; }
+    }
+    if (!cue.frozen) { if (s.on[0]) { cue.x = s.x[0]; cue.y = s.y[0]; } else { cue.on = 0; cue.frozen = true; } }
+    if (!ob.frozen) { if (s.on[obj]) { ob.x = s.x[obj]; ob.y = s.y[obj]; } else { ob.on = 0; ob.frozen = true; } }
+    if (n - hitN >= 400 || (cue.frozen && ob.frozen)) break;
+  }
+  if (hitN < 0) return null;
+  const dir = (x, y) => { const l = Math.sqrt(x * x + y * y); return { l, x: l > 1e-6 ? x / l : 0, y: l > 1e-6 ? y / l : 0 }; };
+  const c = dir(cue.x - sx, cue.y - sy), o = dir(ob.x - ox0, ob.y - oy0);
+  const pocket = st.pocketed.find((q) => q.b === obj);
+  return { obj, ox: o.x, oy: o.y, olen: o.l, cx: c.x, cy: c.y, clen: c.l, objIn: pocket ? pocket.p : -1, scratch: st.pocketed.some((q) => q.b === 0), gx: sx, gy: sy };
 }

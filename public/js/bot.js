@@ -1,5 +1,5 @@
 // Computergegner: sucht saubere Stöße (Geisterkugel), prüft sie in der echten Physik und würfelt je nach Stufe einen Fehler dazu.
-import { R, HX, HY, POCKET_MOUTH, cueShot } from './physics.js';
+import { R, HX, HY, POCKET_MOUTH, POCKET_AIM, cueShot } from './physics.js';
 import { grp, HEAD_X } from './rules.js';
 
 export const LEVELS = {
@@ -21,7 +21,7 @@ function candidates(game, cx, cy, legal) {
   const s = game.sim, out = [];
   for (const t of legal) {
     for (let p = 0; p < 6; p++) {
-      const M = POCKET_MOUTH[p];
+      const M = POCKET_AIM[p];
       let tx = M.x - s.x[t], ty = M.y - s.y[t]; const tl = Math.sqrt(tx * tx + ty * ty); if (tl < 1) continue; tx /= tl; ty /= tl;
       const gx = s.x[t] - tx * 2 * R, gy = s.y[t] - ty * 2 * R;
       if (Math.abs(gx) > HX - R || Math.abs(gy) > HY - R) continue;
