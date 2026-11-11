@@ -178,14 +178,15 @@ function leaveGame(silent) {
 
 // ------------------------------------------------------------------ HUD
 function seatIsMe(seat) { return M.kind === 'hotseat' || M.kind === 'training' ? true : seat === M.me; }
+let trayEl = null;
 function buildHud() {
-  const top = $('#top'); top.innerHTML = '';
+  const top = $('#top'); if (!trayEl) trayEl = $('#tray'); if (trayEl.parentNode) trayEl.parentNode.removeChild(trayEl); top.innerHTML = '';
   for (let i = 0; i < 2; i++) {
     if (M.kind === 'training' && i === 1) continue;
     top.appendChild(el(`<div class="chip" id="chip${i}"><span class="dot" id="dot${i}"></span><span class="nm">${esc(M.names[i])}</span><span class="tg" id="tag${i}"></span></div>`));
   }
   top.style.justifyContent = 'center';
-  const tray = $('#tray'); const c1 = $('#chip1'); if (c1) top.insertBefore(tray, c1); else top.appendChild(tray);
+  const tray = trayEl; const c1 = $('#chip1'); if (c1) top.insertBefore(tray, c1); else top.appendChild(tray);
   updateHud();
 }
 function ballCss(n) {
@@ -203,7 +204,7 @@ function updateHud() {
     const dot = $('#dot' + i);
     dot.style.background = M.mode === '8ball' && g.groups[i] ? ballCss(g.groups[i] === 'solid' ? 3 : 4) : '#e9e9e2';
   }
-  const tr = $('#tray'); tr.innerHTML = '';
+  const tr = trayEl; tr.innerHTML = '';
   for (let b = 1; b <= g.maxBall(); b++) {
     const i = document.createElement('i'); i.style.background = ballCss(b); if (b >= 9 && M.mode === '8ball') i.style.background = `linear-gradient(180deg,#f4f4ee 0 24%,${ballCss(b)} 24% 76%,#f4f4ee 76%)`;
     if (!g.sim.on[b]) i.className = 'out'; tr.appendChild(i);
