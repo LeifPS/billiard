@@ -40,6 +40,7 @@ async function boot() {
   const j = new URLSearchParams(location.search).get('raum');
   showMenu();
   if (j) setTimeout(() => joinRoom(j), 300);
+  else Online.resume(netCtx());
 }
 
 function layout() {
@@ -153,12 +154,12 @@ function showCosmetics(cat) {
 function startMatch(o) {
   const kind = o.kind;
   const seed = (o.seed >>> 0) || (Math.floor(Math.random() * 4e9) + 1);
-  const game = new Game({ mode: o.mode, seed, first: o.first == null ? (Math.random() < 0.5 ? 0 : 1) : o.first });
+  const game = o.gameJSON ? Game.fromJSON(o.gameJSON) : new Game({ mode: o.mode, seed, first: o.first == null ? (Math.random() < 0.5 ? 0 : 1) : o.first });
   const lv = o.level || 'mittel';
   const names = o.names || (kind === 'bot' ? [S.name, ['Karl', 'Mia', 'Otto', 'Lena', 'Paul', 'Zoe'][seed % 6] + ' (' + LEVELS[lv].name + ')'] : kind === 'hotseat' ? ['Spieler 1', 'Spieler 2'] : [S.name, '']);
   M = {
     kind, game, mode: o.mode, level: lv, me: o.me || 0, names, cues: o.cues || [S.cos.cue, S.cos.cue], rand: rng(seed ^ 0x9e3779b9), over: false,
-    timer: o.timer || 0, t0: 0, myPocketed: 0, myFouls: 0, started: Date.now(), ranked: !!o.ranked, ratings: o.ratings || null, net: o.net || null, firstShot: true, lastLog: null,
+    timer: o.timer || 0, t0: 0, myPocketed: 0, myFouls: 0, started: Date.now(), ranked: !!o.ranked, ratings: o.ratings || null, net: o.net || null, firstShot: true, lastLog: null, waiting: null, remoteAim: null, pendingSnap: null, pendingEnd: null,
   };
   if (kind === 'training') M.names = [S.name, 'Training'];
   hideScreen(); $('#modal').classList.add('hidden');
@@ -225,7 +226,7 @@ function startTurn() {
   if (!M) return;
   const g = M.game; updateHud(); $('#hud').classList.add('wait');
   if (g.phase === 'over') return endMatch();
-  anim = { kind: 'idle' };
+  anim = { kind: 'idle' }; M.waiting = null; M.remoteAim = null; M.lastPlaceSend = null;
   scene.showSim(g.sim); scene.setPocketMarks(-1, false);
   const seat = g.turn;
   if (M.kind === 'hotseat') scene.setCosmetics({ cue: M.cues[seat] });
@@ -254,11 +255,11 @@ function defaultAim(g) {
 function startTimer() {
   const t = $('#timer'); clearInterval(M.tint);
   if (!M || !M.timer || M.over || M.game.phase === 'over') { t.style.visibility = 'hidden'; return; }
-  M.tEnd = Date.now() + M.timer * 1000; t.style.visibility = 'visible';
+  M.tDur = M.kind === 'online' && M.game.phase === 'break' ? 90 : M.timer; M.tEnd = Date.now() + M.tDur * 1000; t.style.visibility = 'visible';
   const bar = $('i', t);
   M.tint = setInterval(() => {
     if (!M) return;
-    const left = Math.max(0, M.tEnd - Date.now()); bar.style.transform = `scaleX(${left / (M.timer * 1000)})`; bar.style.background = left < 10000 ? 'var(--bad)' : 'var(--acc)';
+    const left = Math.max(0, M.tEnd - Date.now()); bar.style.transform = `scaleX(${left / (M.tDur * 1000)})`; bar.style.background = left < 10000 ? 'var(--bad)' : 'var(--acc)';
   }, 100);
 }
 function stopTimer() { if (M) clearInterval(M.tint); $('#timer').style.visibility = 'hidden'; }
@@ -286,7 +287,11 @@ function fire() {
   const call = effectiveCall();
   const shot = cueShot(inp.ang, inp.power, inp.a, inp.b);
   M.myFouls0 = M.game.fouls[M.game.turn];
-  if (M.net) M.net.sendShot({ shot, call, ang: inp.ang, pw: inp.power, a: inp.a, b: inp.b });
+  if (M.net) { // online: Server entscheidet, wir halten die Queue zurückgezogen bis sein Stoß kommt
+    M.waiting = { ang: inp.ang, power: inp.power, a: inp.a, b: inp.b };
+    M.net.sendShot({ shot, call, cue: { x: M.game.sim.x[0], y: M.game.sim.y[0] }, ang: inp.ang, pw: inp.power, a: inp.a, b: inp.b });
+    return;
+  }
   runShot(M.game.turn, shot, call, { ang: inp.ang, power: inp.power, a: inp.a, b: inp.b });
 }
 function effectiveCall() {
@@ -321,6 +326,10 @@ function runShot(seat, shot, call, info) {
 }
 
 function finishShot(a) {
+  if (M.pendingSnap) { // Online: der Stand des Servers gilt
+    if (M.pendingHash != null && a.res.st.hash !== M.pendingHash) console.warn('Abweichung zum Server – Stand wird übernommen');
+    M.game = Game.fromJSON(M.pendingSnap); M.pendingSnap = null; M.pendingHash = null;
+  }
   const g = M.game, out = a.res.out;
   scene.showSim(g.sim);
   // Training: immer wieder derselbe Spieler, neu aufbauen wenn fertig
@@ -335,9 +344,9 @@ function finishShot(a) {
     else if (out.continues && out.pocketed.length) toast('Versenkt – weiter', 'good', 1400);
   }
   if (a.mine && M.kind !== 'hotseat') { M.myPocketed += out.pocketed.filter((b) => b !== 0).length; if (out.foul) M.myFouls++; }
-  if (M.net && !M.net.localAuth) M.net.verify(a.res.st.hash);
   updateHud();
   M.firstShot = false;
+  if (M.pendingEnd) { const pe = M.pendingEnd; M.pendingEnd = null; setTimeout(() => endMatch(pe), 900); return; }
   if (g.phase === 'over') { setTimeout(endMatch, 900); return; }
   setTimeout(startTurn, 650);
 }
@@ -363,11 +372,15 @@ function endMatch(info) {
   (meWon ? sfx.win() : sfx.lose());
   const lvl = xp && xp.to > xp.from ? `<div style="margin-top:10px;color:var(--acc);font-weight:700">Level ${xp.to} erreicht! Neues Zubehör freigeschaltet.</div>` : '';
   const m = $('#modal'); m.classList.remove('hidden');
-  const rematch = M.kind === 'online' ? '' : '<button class="btn main" id="rm"><b>Revanche</b></button>';
+  const rematch = '<button class="btn main" id="rm"><b>Revanche</b></button>';
   m.innerHTML = `<div class="box" style="text-align:center"><h3>${text}</h3><div class="sub">${sub}</div>${xp ? `<div class="sub" style="margin-top:8px">+${xp.gained} Erfahrung</div>` : ''}${lvl}<div class="acts">${rematch}<button class="btn" id="mn"><b>Menü</b></button></div></div>`;
   const kind = M.kind, mode = M.mode, level = M.level, names = M.names;
-  const rm = $('#rm', m); if (rm) rm.onclick = () => { m.classList.add('hidden'); startMatch({ kind, mode, level, names: kind === 'bot' ? [S.name, names[1]] : names }); };
-  $('#mn', m).onclick = () => { m.classList.add('hidden'); showMenu(); };
+  const net = M.net;
+  const rm = $('#rm', m); if (rm) rm.onclick = () => {
+    if (net) { net.rematch(); rm.disabled = true; rm.innerHTML = '<b>Warte auf Gegner …</b>'; return; }
+    m.classList.add('hidden'); startMatch({ kind, mode, level, names: kind === 'bot' ? [S.name, names[1]] : names });
+  };
+  $('#mn', m).onclick = () => { m.classList.add('hidden'); leaveGame(); };
 }
 
 function pauseMenu() {
@@ -379,14 +392,19 @@ function pauseMenu() {
       <button class="btn" id="ps"><b>Ton: ${S.set.sound ? 'an' : 'aus'}</b><span>Geräusche des Spiels</span></button>
       <button class="btn" id="pe"><b>Einstellungen</b><span>Spielstand-Code …</span></button>
       <button class="btn" id="pq"><b>${M.kind === 'online' ? 'Aufgeben' : 'Spiel beenden'}</b><span>Zurück ins Menü</span></button>
-    </div><div class="acts"><button class="btn main" id="pc"><b>Weiterspielen</b></button></div></div>`;
+    </div>${M.kind === 'online' ? '<div class="sub" style="margin-top:10px">Nachricht an den Gegner</div><div class="chips" id="em">' + M.net.phrases.map((t, i) => `<button class="btn sm" data-n="${i}"><b>${t}</b></button>`).join('') + '</div>' : ''}<div class="acts"><button class="btn main" id="pc"><b>Weiterspielen</b></button></div></div>`;
+  m.querySelectorAll('#em button').forEach((b) => { b.onclick = () => { M.net.emote(+b.dataset.n); toast('Gesendet', '', 800); m.classList.add('hidden'); }; });
   $('#pc', m).onclick = () => m.classList.add('hidden');
   $('#pg', m).onclick = () => { S.set.guide = S.set.guide >= 1 ? 0.5 : S.set.guide > 0 ? 0 : 1; Store.save(); pauseMenu(); };
   $('#ps', m).onclick = () => { S.set.sound = !S.set.sound; sfx.on = S.set.sound; Store.save(); pauseMenu(); };
   $('#pe', m).onclick = () => { m.classList.add('hidden'); if (window.LGH && window.LGH.oeffnen) window.LGH.oeffnen(); };
   $('#pq', m).onclick = () => {
+    if (M.kind === 'online' && !M.over) {
+      m.innerHTML = '<div class="box" style="text-align:center"><h3>Wirklich aufgeben?</h3><div class="sub">Das Spiel zählt dann als verloren.</div><div class="acts"><button class="btn" id="n"><b>Weiterspielen</b></button><button class="btn main" id="y"><b>Aufgeben</b></button></div></div>';
+      $('#n', m).onclick = () => m.classList.add('hidden'); $('#y', m).onclick = () => { m.classList.add('hidden'); M.net && M.net.forfeit(); };
+      return;
+    }
     m.classList.add('hidden');
-    if (M.kind === 'online' && !M.over) { M.net && M.net.forfeit(); return; }
     if (M.kind === 'bot' && !M.over && M.game.shots > 2) { Store.recordMatch({ mode: M.mode, kind: 'bot', level: M.level, win: false, pocketed: M.myPocketed, fouls: M.myFouls, opp: M.names[1] }); }
     showMenu();
   };
@@ -539,7 +557,11 @@ function drawAim(now) {
     }
     return;
   }
-  if (M.remoteAim && !seatIsMe(g.turn)) {
+  if (M.waiting) {
+    const w = M.waiting; scene.setAim({ show: true, sim: g.sim, ang: w.ang, info: aimInfo(g.sim, w.ang), pull: w.power, spinA: w.a, spinB: w.b, guide: 0, cue: true });
+    scene.setHandMark(false); return;
+  }
+  if (M.remoteAim && !seatIsMe(g.turn) && g.sim.on[0]) {
     const r = M.remoteAim; scene.setAim({ show: true, sim: g.sim, ang: r.ang, info: aimInfo(g.sim, r.ang), pull: r.pull || 0, spinA: r.a || 0, spinB: r.b || 0, guide: 0, cue: true });
     return;
   }
@@ -549,14 +571,26 @@ function drawAim(now) {
     const hand = g.inHand;
     scene.setHandMark(!!hand, s.x[0], s.y[0], hand ? g.canPlace(s.x[0], s.y[0]) : true);
     if (g.eightIsTarget()) scene.setPocketMarks(effectiveCall(), true); else scene.setPocketMarks(-1, false);
+    if (M.net && hand && M.net.sendPlace) { const k = s.x[0].toFixed(1) + ',' + s.y[0].toFixed(1); if (k !== M.lastPlaceSend && now - (M.lastPlaceT || 0) > 100) { M.lastPlaceSend = k; M.lastPlaceT = now; M.net.sendPlace(s.x[0], s.y[0]); } }
     if (M.net && now - (M.lastAimSend || 0) > 120 && M.net.sendAim) { M.lastAimSend = now; M.net.sendAim({ ang: inp.ang, pull: inp.power, a: inp.a, b: inp.b }); }
   } else { scene.setAim(null); scene.setHandMark(false); }
 }
 
-// ------------------------------------------------------------------ Online (Etappe 2)
-async function startOnline(kind) { Online.start(kind, { S, sfx, startMatch, showMenu, toast, setScreen, hideScreen, esc, getM: () => M, runShot, endMatch, startTurn, updateHud, scene, inp, setMRemote: (f) => { if (M) f(M); } }); }
+// ------------------------------------------------------------------ Online
+const busy = () => !!M && (anim.kind === 'cue' || anim.kind === 'run');
+function applyGame(snap) { if (!M) return; M.game = Game.fromJSON(snap); M.waiting = null; scene.showSim(M.game.sim); updateHud(); }
+function onRemoteShot(m) {
+  if (!M || M.over) return;
+  const g = M.game; stopTimer(); inp.on = false;
+  M.waiting = null; M.remoteAim = null;
+  if (g.inHand && m.cue) g.sim.put(0, m.cue.x, m.cue.y);
+  M.pendingSnap = m.snap; M.pendingHash = m.hash;
+  runShot(m.seat, m.shot, m.call, { ang: m.ang, power: m.pw, a: m.a, b: m.b });
+}
+function netCtx(extra) { return Object.assign({ S, sfx, startMatch, showMenu, toast, setScreen, hideScreen, esc, getM: () => M, runShot, endMatch, startTurn, updateHud, scene, inp, busy, applyGame, onRemoteShot, reopenInput: startTurn }, extra); }
+function startOnline(kind) { Online.start(kind, netCtx()); }
 function askCode() { Online.askCode({ S, joinRoom }); }
-function joinRoom(code) { Online.start('join', { S, code, sfx, startMatch, showMenu, toast, setScreen, hideScreen, esc, getM: () => M, runShot, endMatch, startTurn, updateHud, scene, inp }); }
+function joinRoom(code) { Online.start('join', netCtx({ code })); }
 
-window.__bil = () => ({ anim: anim.kind, turn: M && M.game.turn, over: M && M.over, inp: inp.on, power: inp.power, st: anim.res && anim.res.st.time, fouls: M && M.game.fouls });
+window.__bil = () => ({ anim: anim.kind, turn: M && M.game.turn, over: M && M.over, inp: inp.on, power: inp.power, st: anim.res && anim.res.st.time, fouls: M && M.game.fouls, hash: M && M.game.sim.hash(), me: M && M.me, shots: M && M.game.shots, kind: M && M.kind, waiting: !!(M && M.waiting) });
 boot();
