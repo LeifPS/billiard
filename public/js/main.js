@@ -7,6 +7,7 @@ import { Sfx } from './audio.js';
 import * as Store from './store.js';
 import { CATS, ITEMS, find, levelOf, xpForLevel, titleFor, BALL_SETS } from './cosmetics.js';
 import { Online } from './net.js';
+import { ACH, check as checkAch } from './achievements.js';
 
 const $ = (s, r) => (r || document).querySelector(s);
 const el = (h) => { const d = document.createElement('div'); d.innerHTML = h.trim(); return d.firstChild; };
@@ -122,6 +123,7 @@ function showStats() {
     <div class="stat"><div><b>${S.played}</b>Spiele</div><div><b>${S.wins}</b>Siege (${wr}%)</div><div><b>${S.best}</b>Längste Serie</div><div><b>${S.pocketed}</b>Kugeln versenkt</div><div><b>${S.rating}</b>Online-Wertung</div></div>
     <div class="stat"><div><b>${S.by['8ball'].w}/${S.by['8ball'].p}</b>8-Ball</div><div><b>${S.by['9ball'].w}/${S.by['9ball'].p}</b>9-Ball</div><div><b>${S.online.w}/${S.online.p}</b>Online</div>
       <div><b>${S.vsBot.leicht[1]}/${S.vsBot.leicht[0]}</b>Computer leicht</div><div><b>${S.vsBot.mittel[1]}/${S.vsBot.mittel[0]}</b>Computer mittel</div><div><b>${S.vsBot.schwer[1]}/${S.vsBot.schwer[0]}</b>Computer schwer</div></div>
+    <h3 style="margin:14px 0 6px">Erfolge (${Object.keys(S.ach || {}).length}/${ACH.length})</h3>${ACH.map((a) => { const on = !!(S.ach && S.ach[a.id]); return `<div class="sub" style="opacity:${on ? 1 : 0.55}"><b style="color:${on ? 'var(--acc)' : 'inherit'}">${on ? '✓ ' : ''}${esc(a.name)}</b> – ${esc(a.text)}${a.xp ? ' (+' + a.xp + ')' : ''}</div>`; }).join('')}
     <h3 style="margin:14px 0 6px">Letzte Spiele</h3>${rows}</div>`);
   $('#x', s).onclick = showMenu;
 }
@@ -320,7 +322,7 @@ function runShot(seat, shot, call, info) {
   const pre = { turn: g.turn };
   const res = g.shoot(shot, call, true);
   if (!res) { startTurn(); return; }
-  scene.setHandMark(false); inp.on = false;
+  scene.setHandMark(false); inp.on = false; $('#hint').textContent = '';
   anim = { kind: 'cue', t0: performance.now(), res, seat, mine, call, ang: info.ang, power: info.power, a: info.a, b: info.b, pre, done: false };
   scene.setPocketMarks(-1, false);
 }
@@ -343,6 +345,11 @@ function finishShot(a) {
     else if (out.assigned) toast((M.names[a.seat]) + ' spielt ' + (g.groups[a.seat] === 'solid' ? 'die Vollen (1–7)' : 'die Halben (9–15)'), 'good', 2600);
     else if (out.continues && out.pocketed.length) toast('Versenkt – weiter', 'good', 1400);
   }
+  if (a.mine && M.kind !== 'hotseat' && M.kind !== 'training') {
+    const scored = out.pocketed.some((b) => b !== 0) && !out.foul;
+    M.run = scored ? (M.run || 0) + 1 : 0; M.runMax = Math.max(M.runMax || 0, M.run);
+    if (M.mode === '9ball' && g.shots === 1 && out.pocketed.includes(9) && !out.foul && g.phase === 'over' && g.winner === a.seat) M.golden = true;
+  }
   if (a.mine && M.kind !== 'hotseat') { M.myPocketed += out.pocketed.filter((b) => b !== 0).length; if (out.foul) M.myFouls++; }
   updateHud();
   M.firstShot = false;
@@ -358,7 +365,7 @@ function endMatch(info) {
   const winner = info && info.winner != null ? info.winner : g.winner;
   const reason = info && info.reason || g.reason;
   const meWon = M.kind === 'hotseat' ? true : winner === M.me;
-  let xp = null, text = '', sub = esc(reason || '');
+  let xp = null, text = '', sub = esc(reason || ''), achHtml = '';
   if (M.kind === 'bot' || M.kind === 'online') {
     const mult = M.kind === 'bot' ? { leicht: 0.5, mittel: 1, schwer: 1.25 }[M.level] : 1.3;
     const earn = (meWon ? 50 : 18) * mult + M.myPocketed * 3;
@@ -367,13 +374,15 @@ function endMatch(info) {
     if (M.kind === 'online' && M.ratings) { const ra = M.ratings[M.me], rb = M.ratings[1 - M.me], e = 1 / (1 + Math.pow(10, (rb - ra) / 400)); rating = ra + (M.ranked ? 24 : 0) * ((meWon ? 1 : 0) - e); }
     Store.recordMatch({ mode: M.mode, kind: M.kind, level: M.level, win: meWon, pocketed: M.myPocketed, fouls: M.myFouls, opp: M.names[1 - M.me], rating });
     if (rating != null && M.ranked) sub += `<br>Wertung: ${S.rating}`;
+    const got = checkAch(S, { run: M.runMax || 0, golden: M.golden && meWon, clean: meWon && M.myFouls === 0 });
+    if (got.length) { const bonus = got.reduce((t, x) => t + x.xp, 0); if (bonus) { const x2 = Store.addXp(bonus); xp.to = x2.to; xp.gained += bonus; } else Store.save(); achHtml = got.map((x) => `<div class="sub" style="color:var(--acc);margin-top:6px">Erfolg: <b>${esc(x.name)}</b>${x.xp ? ' (+' + x.xp + ')' : ''}</div>`).join(''); }
   } else if (M.kind === 'hotseat') { text = esc(M.names[winner]) + ' gewinnt'; }
   if (!text) text = meWon ? 'Du hast gewonnen!' : (M.kind === 'online' ? esc(M.names[1 - M.me]) + ' gewinnt' : 'Verloren');
   (meWon ? sfx.win() : sfx.lose());
   const lvl = xp && xp.to > xp.from ? `<div style="margin-top:10px;color:var(--acc);font-weight:700">Level ${xp.to} erreicht! Neues Zubehör freigeschaltet.</div>` : '';
   const m = $('#modal'); m.classList.remove('hidden');
   const rematch = '<button class="btn main" id="rm"><b>Revanche</b></button>';
-  m.innerHTML = `<div class="box" style="text-align:center"><h3>${text}</h3><div class="sub">${sub}</div>${xp ? `<div class="sub" style="margin-top:8px">+${xp.gained} Erfahrung</div>` : ''}${lvl}<div class="acts">${rematch}<button class="btn" id="mn"><b>Menü</b></button></div></div>`;
+  m.innerHTML = `<div class="box" style="text-align:center"><h3>${text}</h3><div class="sub">${sub}</div>${xp ? `<div class="sub" style="margin-top:8px">+${xp.gained} Erfahrung</div>` : ''}${lvl}${achHtml}<div class="acts">${rematch}<button class="btn" id="mn"><b>Menü</b></button></div></div>`;
   const kind = M.kind, mode = M.mode, level = M.level, names = M.names;
   const net = M.net;
   const rm = $('#rm', m); if (rm) rm.onclick = () => {

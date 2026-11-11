@@ -7,7 +7,7 @@ const DEF = () => ({
   by: { '8ball': { p: 0, w: 0 }, '9ball': { p: 0, w: 0 } }, vsBot: { leicht: [0, 0], mittel: [0, 0], schwer: [0, 0] }, online: { p: 0, w: 0 },
   cos: { cloth: 'gruen', frame: 'nuss', balls: 'klassik', cue: 'ahorn', trail: 'keine' },
   set: { sound: true, guide: 1, mode: '8ball', level: 'mittel', lefty: false },
-  hist: [],
+  hist: [], ach: {},
 });
 let data = null;
 export function load() {

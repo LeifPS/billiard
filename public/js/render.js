@@ -65,7 +65,8 @@ export class Scene3D {
     this.buildBalls(16);
     this.buildGuides(); this.buildCue();
     this.cos = null;
-    this.trail = null;
+    this.trail = { items: [], n: 0, geo: new THREE.CircleGeometry(1.0, 12).rotateX(-Math.PI / 2), last: 0 };
+    for (let i = 0; i < 90; i++) { const m = new THREE.Mesh(this.trail.geo, new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0, depthWrite: false })); m.visible = false; m.position.y = R * 2 + 0.3; this.scene.add(m); this.trail.items.push({ m, t0: -9, vx: 0, vz: 0 }); }
     this.setCosmetics({ cloth: 'gruen', frame: 'nuss', balls: 'klassik', cue: 'ahorn', trail: 'keine' });
   }
 
@@ -76,6 +77,23 @@ export class Scene3D {
     if (prev.cloth !== this.cos.cloth || prev.frame !== this.cos.frame) this.buildTable();
     if (prev.balls !== this.cos.balls) this.applyBallSet(this.cos.balls);
     if (prev.cue !== this.cos.cue) this.applyCue(this.cos.cue);
+  }
+  clearTrail() { for (const p of this.trail.items) { p.t0 = -9; p.m.visible = false; } }
+  emitTrail(x, y, tNow) {
+    const c = find('trail', this.cos.trail); if (!c || !c.col) return;
+    const T = this.trail; if (tNow - T.last < 0.025) return; T.last = tNow;
+    const p = T.items[T.n++ % T.items.length];
+    p.t0 = tNow; p.m.position.set(x + (Math.random() - 0.5) * 1.2, R * 2 + 0.3, y + (Math.random() - 0.5) * 1.2);
+    p.vx = (Math.random() - 0.5) * 6; p.vz = (Math.random() - 0.5) * 6;
+    p.m.material.color.set(c.col === 'rainbow' ? new THREE.Color().setHSL((tNow * 0.9) % 1, 0.9, 0.62) : c.col);
+    p.m.visible = true; p.life = c.id === 'funke' ? 0.55 : 0.9;
+  }
+  updateTrail(tNow) {
+    for (const p of this.trail.items) {
+      if (!p.m.visible) continue; const k = (tNow - p.t0) / (p.life || 0.8);
+      if (k >= 1) { p.m.visible = false; continue; }
+      p.m.material.opacity = 0.8 * (1 - k); p.m.scale.setScalar(1.3 - 0.8 * k); p.m.position.x += p.vx * 0.016; p.m.position.z += p.vz * 0.016;
+    }
   }
   setOpponentCue(id) { this.applyCue(id || this.cos.cue); }
 
@@ -222,7 +240,7 @@ export class Scene3D {
   showSim(sim) {
     for (let i = 0; i < 16; i++) {
       const b = this.balls[i], on = !!sim.on[i] && i <= (this.maxBall ?? 15);
-      this.lastOn[i] = sim.on[i] ? 1 : 0; this.fall[i] = null;
+      this.lastOn[i] = sim.on[i] ? 1 : 0; this.fall[i] = null; if (i === 0) this.clearTrail();
       b.mesh.visible = on; b.sh.visible = on; b.mesh.scale.setScalar(1);
       if (on) { b.mesh.position.set(sim.x[i], R, sim.y[i]); b.sh.position.set(sim.x[i] + 0.4, 0.04, sim.y[i] + 0.6); }
     }
@@ -245,6 +263,7 @@ export class Scene3D {
       if (this.fall[i]) { this.fallStep(i, tNow); continue; }
       const x = f0[o] + (f1[o] - f0[o]) * alpha, y = f0[o + 1] + (f1[o + 1] - f0[o + 1]) * alpha;
       b.mesh.position.set(x, R, y); b.sh.position.set(x + 0.4, 0.04, y + 0.6); b.sh.visible = true; b.mesh.visible = true;
+      if (i === 0 && (Math.abs(f1[o] - f0[o]) + Math.abs(f1[o + 1] - f0[o + 1])) > 0.02) this.emitTrail(x, y, tNow);
       // Drehung: Winkelgeschwindigkeit sim -> three: (-wx, -wz, -wy)
       const wx = -(f0[o + 2] + f1[o + 2]) / 2, wy = -(f0[o + 4] + f1[o + 4]) / 2, wz = -(f0[o + 3] + f1[o + 3]) / 2;
       const w = Math.sqrt(wx * wx + wy * wy + wz * wz);
@@ -290,5 +309,5 @@ export class Scene3D {
   }
   setHandMark(on, x, y, ok) { this.gHand.visible = on; if (on) { this.gHand.position.set(x, LH, y); this.gHand.material.color.set(ok ? 0x5dff9a : 0xff5d5d); } }
 
-  render() { this.renderer.render(this.scene, this.camera); }
+  render() { this.updateTrail(performance.now() / 1000); this.renderer.render(this.scene, this.camera); }
 }
