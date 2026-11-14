@@ -1,6 +1,6 @@
 // 3D-Darstellung (three.js): Tisch von oben, Kugeln, Queue, Zielhilfe. Weltkoordinaten: Simulation (x,y) -> three (x, 0, y).
 import * as THREE from '../vendor/three.module.min.js';
-import { R, HX, HY, POCKET_MOUTH, POCKETS, CK, SK } from './physics.js';
+import { R, HX, HY, POCKET_MOUTH, POCKETS, CUSHIONS } from './physics.js';
 import { BALL_SETS, find } from './cosmetics.js';
 
 const F = 11;               // Breite von Bande + Holzrahmen
@@ -101,22 +101,34 @@ export class Scene3D {
     const g = this.tableGroup; while (g.children.length) { const o = g.children.pop(); o.traverse && o.traverse((m) => { m.geometry && m.geometry.dispose(); }); }
     const cl = find('cloth', this.cos.cloth), fr = find('frame', this.cos.frame);
     const clothMat = new THREE.MeshStandardMaterial({ color: cl.c, roughness: 0.95, map: this.clothTex || (this.clothTex = clothTexture()) });
-    const cushMat = new THREE.MeshStandardMaterial({ color: cl.d, roughness: 0.85 });
+    const cushMat = new THREE.MeshStandardMaterial({ color: cl.d, roughness: 0.85, side: THREE.DoubleSide });
     const woodMat = new THREE.MeshStandardMaterial({ color: fr.c, roughness: 0.45, metalness: 0.05 });
     const inlay = new THREE.MeshStandardMaterial({ color: fr.a, roughness: 0.35, metalness: 0.25 });
     const dark = new THREE.MeshBasicMaterial({ color: 0x050506 });
     const cloth = new THREE.Mesh(new THREE.PlaneGeometry(2 * HX + 14, 2 * HY + 14).rotateX(-Math.PI / 2), clothMat); cloth.position.y = 0; g.add(cloth);
     const floor = new THREE.Mesh(new THREE.PlaneGeometry(900, 700).rotateX(-Math.PI / 2), new THREE.MeshStandardMaterial({ color: 0x14181f, roughness: 1 })); floor.position.y = -40; g.add(floor);
-    // Bandenstücke (Querschnitt: Nase bei u=0, nach außen u)
-    const prof = new THREE.Shape(); prof.moveTo(-1.1, 0); prof.lineTo(0, 2.3); prof.lineTo(5, 2.3); prof.lineTo(5, 0); prof.closePath();
-    const cushion = (len) => new THREE.ExtrudeGeometry(prof, { depth: len, bevelEnabled: false }).translate(0, 0, -len / 2);
-    const longLen = HX - CK - SK, shortLen = 2 * (HY - CK);
-    for (const sx of [-1, 1]) for (const sz of [-1, 1]) {
-      const m = new THREE.Mesh(cushion(longLen), cushMat); // lange Bande: Profil-x nach außen entlang z
-      m.rotation.y = sz > 0 ? -Math.PI / 2 : Math.PI / 2; m.position.set(sx * (SK + longLen / 2), 0, sz * HY); g.add(m);
-    }
-    for (const sx of [-1, 1]) {
-      const m = new THREE.Mesh(cushion(shortLen), cushMat); m.rotation.y = sx > 0 ? 0 : Math.PI; m.position.set(sx * HX, 0, 0); g.add(m); // Nase am Spielfeldrand, Gummi nach außen zum Holz
+    // Banden: Draufsicht-Polygon aus der Physik (Nase + schräge Enden zur Tasche), Nase leicht abgeschrägt (Gummi läuft nach unten aus)
+    const loft = (c) => {
+      const H = 2.3, sl = 1.1, ix = -c.o.x * sl, iy = -c.o.y * sl; // Fuß der Nase liegt etwas weiter im Spielfeld
+      const top = [c.A, c.B, c.B2, c.A2].map((p) => [p.x, H, p.y]);
+      const bot = [[c.A.x + ix, 0, c.A.y + iy], [c.B.x + ix, 0, c.B.y + iy], [c.B2.x, 0, c.B2.y], [c.A2.x, 0, c.A2.y]];
+      const pos = [], quad = (a, b, cc, d) => { pos.push(...a, ...b, ...cc, ...a, ...cc, ...d); };
+      quad(top[0], top[1], top[2], top[3]); // Oberseite
+      for (let k = 0; k < 4; k++) { const k2 = (k + 1) % 4; quad(bot[k], bot[k2], top[k2], top[k]); }
+      const geo = new THREE.BufferGeometry(); geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); geo.computeVertexNormals();
+      geo.computeVertexNormals(); return geo;
+    };
+    for (const c of CUSHIONS) g.add(new THREE.Mesh(loft(c), cushMat));
+    // Taschenmäuler: dunkle Platte zwischen den Bandenenden (statt Filz), wie die Metallecken am echten Tisch
+    const plateMat = new THREE.MeshBasicMaterial({ color: 0x15171b });
+    const plate = (pts) => { const sh = new THREE.Shape(); pts.forEach((p, k) => (k ? sh.lineTo(p.x, -p.y) : sh.moveTo(p.x, -p.y))); const m = new THREE.Mesh(new THREE.ShapeGeometry(sh).rotateX(-Math.PI / 2), plateMat); m.position.y = 0.05; g.add(m); };
+    for (const sy of [-1, 1]) {
+      const l = CUSHIONS[(sy > 0 ? 2 : 0) + 1], r = CUSHIONS[(sy > 0 ? 2 : 0)]; // rechte/linke lange Bande dieser Seite
+      plate([l.A, l.A2, { x: -l.A2.x, y: l.A2.y }, { x: -l.A.x, y: l.A.y }]);
+      for (const sx of [-1, 1]) {
+        const lo = CUSHIONS[(sy > 0 ? 2 : 0) + (sx > 0 ? 1 : 0)], sh = CUSHIONS[4 + (sx > 0 ? 1 : 0)], se = sy > 0 ? [sh.B, sh.B2] : [sh.A, sh.A2];
+        plate([lo.B, lo.B2, { x: sx * (HX + 5), y: sy * (HY + 5) }, se[1], se[0]]);
+      }
     }
     // Rahmen
     const wood = (w, d, x, z) => { const m = new THREE.Mesh(new THREE.BoxGeometry(w, TOP, d), woodMat); m.position.set(x, TOP / 2, z); g.add(m); };

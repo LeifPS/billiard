@@ -29,10 +29,28 @@ export const POCKET_AIM = [
   { x: -(HX - 3.5), y: -(HY - 3.5) }, { x: 0, y: -HY }, { x: HX - 3.5, y: -(HY - 3.5) },
   { x: -(HX - 3.5), y: HY - 3.5 }, { x: 0, y: HY }, { x: HX - 3.5, y: HY - 3.5 },
 ];
-const RK = R + 1.0;
-const KNUCKLES = [];
-for (const sx of [-1, 1]) for (const sy of [-1, 1]) {
-  KNUCKLES.push({ x: sx * (HX - CK), y: sy * HY }, { x: sx * HX, y: sy * (HY - CK) }, { x: sx * SK, y: sy * HY });
+// Banden als Polygone (Draufsicht), identisch für Anzeige und Physik: Nase A->B am Spielfeldrand, dann die Enden
+// schräg nach außen zur Tasche hin. Echte Tische: Eckentasche 142° Innenwinkel (Schräge 38° zur Bande), Seitentasche 103° (77°).
+export const CUSH_T = 5;                       // Dicke der Bande (Nase bis Holz)
+const LEAN_C = 1 / Math.tan(38 * Math.PI / 180), LEAN_S = 1 / Math.tan(77 * Math.PI / 180); // Weg entlang der Bande je cm nach außen
+function mkCush(ax, ay, bx, by, ox, oy, la, lb) {
+  const dx = bx - ax, dy = by - ay, l = Math.sqrt(dx * dx + dy * dy), ux = dx / l, uy = dy / l, T = CUSH_T;
+  return { A: { x: ax, y: ay }, B: { x: bx, y: by }, A2: { x: ax + ox * T - ux * la * T, y: ay + oy * T - uy * la * T }, B2: { x: bx + ox * T + ux * lb * T, y: by + oy * T + uy * lb * T }, o: { x: ox, y: oy } };
+}
+export const CUSHIONS = [];
+for (const sy of [-1, 1]) for (const sx of [-1, 1]) CUSHIONS.push(mkCush(sx * SK, sy * HY, sx * (HX - CK), sy * HY, 0, sy, LEAN_S, LEAN_C));
+for (const sx of [-1, 1]) CUSHIONS.push(mkCush(sx * HX, -(HY - CK), sx * HX, HY - CK, sx, 0, LEAN_C, LEAN_C));
+// Kollisionskanten: Nase und beide Schrägen; n zeigt zur offenen Seite (zum Spielfeld bzw. in die Tasche)
+const SEGS = [];
+function addSeg(p, q, sideX, sideY) {
+  const dx = q.x - p.x, dy = q.y - p.y, l2 = dx * dx + dy * dy, l = Math.sqrt(l2);
+  let nx = -dy / l, ny = dx / l; if (nx * sideX + ny * sideY < 0) { nx = -nx; ny = -ny; }
+  SEGS.push({ ax: p.x, ay: p.y, dx, dy, il2: 1 / l2, nx, ny, x0: Math.min(p.x, q.x) - R, x1: Math.max(p.x, q.x) + R, y0: Math.min(p.y, q.y) - R, y1: Math.max(p.y, q.y) + R });
+}
+for (const c of CUSHIONS) {
+  addSeg(c.A, c.B, -c.o.x, -c.o.y);                                   // Nase: offen zum Spielfeld
+  const mx = (c.A.x + c.B.x) / 2, my = (c.A.y + c.B.y) / 2;           // Schrägen: offen weg von der Bandenmitte
+  addSeg(c.A, c.A2, c.A.x - mx, c.A.y - my); addSeg(c.B, c.B2, c.B.x - mx, c.B.y - my);
 }
 
 export class Sim {
@@ -100,15 +118,27 @@ export class Sim {
       }
       if (wz[i] !== 0) { wz[i] *= WZ_DAMP; if (wz[i] < 0.3 && wz[i] > -0.3 && !moving) wz[i] = 0; }
     }
-    // 2) Banden und Taschenkanten
+    // 2) Banden: Nase und Schrägen als Kanten (Kugelmitte hält Abstand R; an den Enden Rundung um die Spitze)
     for (let i = 0; i < 16; i++) {
       if (!on[i]) continue;
-      const px = x[i], py = y[i];
-      if (py > HY - R) { if ((px > SK && px < HX - CK) || (px < -SK && px > -(HX - CK))) { y[i] = HY - R; this.rail(i, 0, 1, st); } }
-      else if (py < -HY + R) { if ((px > SK && px < HX - CK) || (px < -SK && px > -(HX - CK))) { y[i] = -HY + R; this.rail(i, 0, -1, st); } }
-      if (px > HX - R) { if (py > -(HY - CK) && py < HY - CK) { x[i] = HX - R; this.rail(i, 1, 0, st); } }
-      else if (px < -HX + R) { if (py > -(HY - CK) && py < HY - CK) { x[i] = -HX + R; this.rail(i, -1, 0, st); } }
-      if (Math.abs(x[i]) > HX - 14 || Math.abs(y[i]) > HY - 14) this.knuckles(i, st);
+      for (let k = 0; k < SEGS.length; k++) {
+        const S = SEGS[k], px = x[i], py = y[i];
+        if (px < S.x0 || px > S.x1 || py < S.y0 || py > S.y1) continue;
+        let t = ((px - S.ax) * S.dx + (py - S.ay) * S.dy) * S.il2; if (t < 0) t = 0; else if (t > 1) t = 1;
+        const qx = S.ax + S.dx * t, qy = S.ay + S.dy * t, ex = px - qx, ey = py - qy, d2 = ex * ex + ey * ey;
+        if (d2 >= R * R) continue;
+        const edge = t > 0 && t < 1;
+        let nx, ny;
+        if (d2 < 1e-12 || (edge && (S.nx * (px - S.ax) + S.ny * (py - S.ay)) < 0)) { nx = S.nx; ny = S.ny; } else { const d = Math.sqrt(d2); nx = ex / d; ny = ey / d; }
+        x[i] = qx + nx * R; y[i] = qy + ny * R;
+        const vn = vx[i] * nx + vy[i] * ny;
+        if (vn >= 0) continue;
+        if (edge) this.rail(i, -nx, -ny, st);
+        else { // Spitze der Bande: härterer, reibungsfreier Abprall
+          const e = 0.6; vx[i] -= (1 + e) * vn * nx; vy[i] -= (1 + e) * vn * ny;
+          if (st) { if (-vn > 4) st.events.push({ k: 'rail', t: this.t, a: i, s: -vn }); if (st.first >= 0) st.railAfter = true; if (i !== 0) st.railMask |= (1 << i); }
+        }
+      }
     }
     // 3) Kugel-Kugel (mehrere Durchgänge für Haufen beim Anstoß)
     for (let pass = 0; pass < 3; pass++) {
@@ -128,7 +158,7 @@ export class Sim {
       const past = Math.abs(x[i]) > HX + 0.5 || Math.abs(y[i]) > HY + 0.5;
       for (let p = 0; p < 6; p++) {
         const P = POCKETS[p], dx = x[i] - P.x, dy = y[i] - P.y;
-        if (dx * dx + dy * dy < P.r * P.r || (past && (x[i] * P.x >= 0 || P.x === 0) && (y[i] * P.y >= 0) && dx * dx + dy * dy < 20 * 20)) {
+        if (dx * dx + dy * dy < P.r * P.r || (P.c && (P.x > 0 ? x[i] : -x[i]) + (P.y > 0 ? y[i] : -y[i]) > HX + HY - CK) || (past && (x[i] * P.x >= 0 || P.x === 0) && (y[i] * P.y >= 0) && dx * dx + dy * dy < 20 * 20)) {
           if (st) { st.pocketed.push({ b: i, p, t: this.t }); st.events.push({ k: 'pocket', t: this.t, a: i, p, s: Math.sqrt(vx[i] * vx[i] + vy[i] * vy[i]) }); }
           this.remove(i);
           break;
@@ -153,20 +183,6 @@ export class Sim {
       if (vn > 4) st.events.push({ k: 'rail', t: this.t, a: i, s: vn });
       if (st.first >= 0) st.railAfter = true;
       if (i !== 0) st.railMask |= (1 << i);
-    }
-  }
-
-  knuckles(i, st) {
-    const x = this.x, y = this.y, vx = this.vx, vy = this.vy;
-    for (let k = 0; k < KNUCKLES.length; k++) {
-      const K = KNUCKLES[k], dx = x[i] - K.x, dy = y[i] - K.y, d2 = dx * dx + dy * dy;
-      if (d2 >= RK * RK || d2 === 0) continue;
-      const d = Math.sqrt(d2), nx = dx / d, ny = dy / d, vn = vx[i] * nx + vy[i] * ny;
-      x[i] = K.x + nx * RK; y[i] = K.y + ny * RK;
-      if (vn < 0) {
-        const e = 0.6; vx[i] -= (1 + e) * vn * nx; vy[i] -= (1 + e) * vn * ny;
-        if (st) { if (-vn > 4) st.events.push({ k: 'rail', t: this.t, a: i, s: -vn }); if (st.first >= 0) st.railAfter = true; if (i !== 0) st.railMask |= (1 << i); }
-      }
     }
   }
 
