@@ -116,7 +116,7 @@ export class Scene3D {
       m.rotation.y = sz > 0 ? -Math.PI / 2 : Math.PI / 2; m.position.set(sx * (SK + longLen / 2), 0, sz * HY); g.add(m);
     }
     for (const sx of [-1, 1]) {
-      const m = new THREE.Mesh(cushion(shortLen), cushMat); m.rotation.y = sx > 0 ? Math.PI : 0; m.position.set(sx * HX, 0, 0); g.add(m);
+      const m = new THREE.Mesh(cushion(shortLen), cushMat); m.rotation.y = sx > 0 ? 0 : Math.PI; m.position.set(sx * HX, 0, 0); g.add(m); // Nase am Spielfeldrand, Gummi nach außen zum Holz
     }
     // Rahmen
     const wood = (w, d, x, z) => { const m = new THREE.Mesh(new THREE.BoxGeometry(w, TOP, d), woodMat); m.position.set(x, TOP / 2, z); g.add(m); };

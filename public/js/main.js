@@ -617,5 +617,6 @@ function startOnline(kind) { Online.start(kind, netCtx()); }
 function askCode() { Online.askCode({ S, joinRoom }); }
 function joinRoom(code) { Online.start('join', netCtx({ code })); }
 
+window.__scene = () => scene;
 window.__bil = () => ({ anim: anim.kind, turn: M && M.game.turn, over: M && M.over, inp: inp.on, power: inp.power, st: anim.res && anim.res.st.time, fouls: M && M.game.fouls, hash: M && M.game.sim.hash(), me: M && M.me, shots: M && M.game.shots, kind: M && M.kind, waiting: !!(M && M.waiting) });
 boot();
