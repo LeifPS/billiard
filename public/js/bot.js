@@ -109,3 +109,45 @@ function finish(b, L, rand) {
   out.power = Math.max(0.12, Math.min(1, out.power * (1 + gauss(rand) * L.powErr)));
   return out;
 }
+
+// Menschlicher Ablauf eines Stoßes: gucken -> grob zielen (mit Überschwingen) -> Feinjustieren -> Probestöße -> langsam ausholen.
+// Ergebnis: Stützpunkte {t, ang, pull} in Sekunden; die Anzeige interpoliert weich dazwischen.
+export function botPlan(from, to, power, lvKey, rand) {
+  const r = (a, b) => a + (b - a) * rand();
+  const norm = (d) => { while (d > Math.PI) d -= 2 * Math.PI; while (d < -Math.PI) d += 2 * Math.PI; return d; };
+  const f = { leicht: 1.0, mittel: 0.85, schwer: 0.7 }[lvKey] || 1;
+  const kf = [{ t: 0, ang: from, pull: 0 }]; let t = 0, cur = from;
+  const add = (dt, ang, pull, hold) => { t += dt; kf.push({ t, ang, pull }); cur = ang; if (hold) { t += hold; kf.push({ t, ang, pull }); } };
+  const tgt = from + norm(to - from); // kürzester Weg
+  // 1. Gucken: der Blick wandert kurz über den Tisch, dann ruht er
+  add(r(0.35, 0.7) * f, from, 0, 0);
+  if (rand() < 0.6) add(r(0.5, 0.9) * f, from + r(-0.45, 0.45), 0, r(0.15, 0.45));
+  // 2. Grob zielen, meist ein Stück über das Ziel hinaus
+  const d = norm(tgt - cur), big = Math.abs(d) > 0.12;
+  const over = tgt + (big ? Math.sign(d || 1) * r(0.02, 0.07) : r(-0.025, 0.025));
+  add(Math.min(1.5, Math.max(0.45, 0.45 + Math.abs(d) * 0.9)) * f, over, 0, r(0.1, 0.35) * f);
+  // 3. Feinjustieren: immer kleinere Korrekturen
+  const n = 2 + Math.floor(rand() * 3);
+  for (let i = 0; i < n; i++) {
+    const last = i === n - 1;
+    const next = last ? tgt : tgt + (cur - tgt) * r(0.25, 0.6) * (rand() < 0.3 ? -1 : 1);
+    add(r(0.16, 0.38) * f, next, 0, r(0.1, 0.4) * f);
+  }
+  // 4. Probestöße vor dem eigentlichen Stoß
+  const strokes = lvKey === 'leicht' ? Math.floor(rand() * 2) : lvKey === 'mittel' ? 1 + Math.floor(rand() * 2) : 1 + Math.floor(rand() * 3);
+  for (let i = 0; i < strokes; i++) {
+    const pp = Math.min(0.6, r(0.22, 0.45) * (0.5 + power));
+    add(r(0.34, 0.55) * f, tgt, pp, r(0.03, 0.12));
+    add(r(0.18, 0.3) * f, tgt, 0.0, r(0.05, 0.2));
+  }
+  // 5. Ausholen: langsam zurück, kurz anhalten, dann Stoß
+  add(r(0.15, 0.3), tgt, 0.0, r(0.1, 0.3));
+  add((0.45 + power * 0.7) * r(0.85, 1.15) * f, tgt, power, r(0.12, 0.35));
+  return { kf, end: t, ang: tgt };
+}
+export function samplePlan(plan, tt) {
+  const kf = plan.kf; if (tt >= plan.end) { const l = kf[kf.length - 1]; return { ang: l.ang, pull: l.pull, done: true }; }
+  let i = 0; while (i < kf.length - 2 && kf[i + 1].t <= tt) i++;
+  const a = kf[i], b = kf[i + 1], k = b.t > a.t ? Math.min(1, Math.max(0, (tt - a.t) / (b.t - a.t))) : 1, e = k * k * (3 - 2 * k);
+  return { ang: a.ang + (b.ang - a.ang) * e, pull: a.pull + (b.pull - a.pull) * e, done: false };
+}

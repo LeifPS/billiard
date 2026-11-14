@@ -42,7 +42,13 @@ export const ITEMS = {
     { id: 'gold', name: 'Goldrausch', lv: 12, a: '#ffe08a', b: '#b8860b', t: '#2b2b2b' },
     { id: 'karbon', name: 'Karbon', lv: 16, a: '#2e2e33', b: '#111114', t: '#ff5a3c' },
     { id: 'regenbogen', name: 'Regenbogen', lv: 20, a: '#ff66c4', b: '#4fc3f7', t: '#ffffff', rainbow: true },
-  ],
+    // Besondere Stäbe: leuchten und sprühen, auch der Gegner sieht sie (fx = Effektart, glow = Leuchtfarbe)
+    { id: 'glut', name: 'Glutstab', lv: 7, a: '#3a1a10', b: '#1a0a06', t: '#ff7a2a', fx: 'glut', glow: '#ff6a1a', special: true },
+    { id: 'frost', name: 'Eiszapfen', lv: 10, a: '#dff6ff', b: '#6fb8e8', t: '#ffffff', fx: 'frost', glow: '#8fe3ff', special: true },
+    { id: 'neon', name: 'Neon-Puls', lv: 14, a: '#14161f', b: '#0b0c12', t: '#00ffd5', fx: 'neon', glow: '#00ffd5', special: true },
+    { id: 'blitz', name: 'Gewitter', lv: 18, a: '#2b2d42', b: '#14151f', t: '#fff36b', fx: 'blitz', glow: '#fff36b', special: true },
+    { id: 'galaxie', name: 'Sternenhimmel', lv: 22, a: '#1b1448', b: '#0a0723', t: '#e9d5ff', fx: 'galaxie', glow: '#b48cff', special: true },
+  ].sort((x, y) => x.lv - y.lv),
   trail: [
     { id: 'keine', name: 'Keine', lv: 0 },
     { id: 'kreide', name: 'Kreidestaub', lv: 6, col: '#cfe3ff' },

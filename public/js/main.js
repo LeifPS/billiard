@@ -2,7 +2,8 @@
 import { Scene3D } from './render.js';
 import { Game, rng, HEAD_X, FOOT_X, grp } from './rules.js';
 import { R, HX, HY, POCKET_MOUTH, cueShot, aimInfo, predictShot, FRAME_STEPS, DT } from './physics.js';
-import { botShot, botPlace, LEVELS } from './bot.js';
+import { botShot, botPlace, botPlan, samplePlan, LEVELS } from './bot.js';
+import { botName, botCue } from './names.js';
 import { Sfx } from './audio.js';
 import * as Store from './store.js';
 import { CATS, ITEMS, find, levelOf, xpForLevel, titleFor, BALL_SETS } from './cosmetics.js';
@@ -133,13 +134,13 @@ function showCosmetics(cat) {
   const sw = (c, it) => {
     if (c === 'cloth') return `background:${it.c}`;
     if (c === 'frame') return `background:linear-gradient(90deg,${it.c} 70%,${it.a} 70%,${it.a} 78%,${it.c} 78%)`;
-    if (c === 'cue') return `background:linear-gradient(90deg,${it.t} 0 6%,${it.a} 6% 62%,${it.b} 62%)`;
+    if (c === 'cue') return `background:linear-gradient(90deg,${it.t} 0 6%,${it.a} 6% 62%,${it.b} 62%)${it.glow ? `;box-shadow:0 0 10px ${it.glow}` : ''}`;
     if (c === 'balls') { const b = BALL_SETS[it.id]; return `background:linear-gradient(90deg,${b.cols.slice(0, 7).map((x, i) => `${x} ${i * 14.3}% ${(i + 1) * 14.3}%`).join(',')})`; }
     return `background:${it.col === 'rainbow' ? 'linear-gradient(90deg,#f55,#fb5,#5f5,#5bf,#b5f)' : it.col || '#222'}`;
   };
   const items = ITEMS[cat].map((it) => {
     const open = lv >= it.lv, sel = S.cos[cat] === it.id;
-    return `<button class="item ${sel ? 'sel' : ''} ${open ? '' : 'lock'}" data-id="${it.id}"><div class="sw" style="${sw(cat, it)}"></div><b style="font-size:13.5px">${it.name}</b><small>${open ? (sel ? 'Ausgewählt' : 'Frei') : 'ab Level ' + it.lv}</small></button>`;
+    return `<button class="item ${sel ? 'sel' : ''} ${open ? '' : 'lock'}" data-id="${it.id}"><div class="sw" style="${sw(cat, it)}"></div><b style="font-size:13.5px">${it.name}</b><small>${open ? (sel ? 'Ausgewählt' : 'Frei') : 'ab Level ' + it.lv}${it.special ? ' · ✦ Effekt' : ''}</small></button>`;
   }).join('');
   const s = setScreen(`<button class="back" id="x">&#10005;</button><div class="page" style="width:min(520px,100%);margin-left:auto"><h2>Kosmetik</h2><div class="sub">Level ${lv} · neue Dinge schaltest du durch Spielen frei.</div>
     <div class="tabs">${CATS.map((c) => `<button data-c="${c.id}" class="${c.id === cat ? 'on' : ''}">${c.name}</button>`).join('')}</div><div class="items">${items}</div></div>`, 'side');
@@ -158,9 +159,10 @@ function startMatch(o) {
   const seed = (o.seed >>> 0) || (Math.floor(Math.random() * 4e9) + 1);
   const game = o.gameJSON ? Game.fromJSON(o.gameJSON) : new Game({ mode: o.mode, seed, first: o.first == null ? (Math.random() < 0.5 ? 0 : 1) : o.first });
   const lv = o.level || 'mittel';
-  const names = o.names || (kind === 'bot' ? [S.name, ['Karl', 'Mia', 'Otto', 'Lena', 'Paul', 'Zoe'][seed % 6] + ' (' + LEVELS[lv].name + ')'] : kind === 'hotseat' ? ['Spieler 1', 'Spieler 2'] : [S.name, '']);
+  const ident = kind === 'bot' ? { name: botName(rng(seed ^ 0x51ed270b)), cue: botCue(rng(seed ^ 0x2545f491)) } : null;
+  const names = o.names || (kind === 'bot' ? [S.name, ident.name] : kind === 'hotseat' ? ['Spieler 1', 'Spieler 2'] : [S.name, '']);
   M = {
-    kind, game, mode: o.mode, level: lv, me: o.me || 0, names, cues: o.cues || [S.cos.cue, S.cos.cue], rand: rng(seed ^ 0x9e3779b9), over: false,
+    kind, game, mode: o.mode, level: lv, me: o.me || 0, names, cues: o.cues || [S.cos.cue, ident ? ident.cue : S.cos.cue], rand: rng(seed ^ 0x9e3779b9), over: false,
     timer: o.timer || 0, t0: 0, myPocketed: 0, myFouls: 0, started: Date.now(), ranked: !!o.ranked, ratings: o.ratings || null, net: o.net || null, firstShot: true, lastLog: null, waiting: null, remoteAim: null, pendingSnap: null, pendingEnd: null,
   };
   if (kind === 'training') M.names = [S.name, 'Training'];
@@ -232,9 +234,9 @@ function startTurn() {
   anim = { kind: 'idle' }; M.waiting = null; M.remoteAim = null; M.lastPlaceSend = null;
   scene.showSim(g.sim); scene.setPocketMarks(-1, false);
   const seat = g.turn;
-  if (M.kind === 'hotseat') scene.setCosmetics({ cue: M.cues[seat] });
+  scene.setCosmetics({ cue: M.cues[seat] || S.cos.cue });
   if (isBotSeat(seat)) return botTurn();
-  if (isRemoteSeat(seat)) { inp.on = false; scene.setCosmetics({ cue: M.cues[seat] }); startTimer(); return; }
+  if (isRemoteSeat(seat)) { inp.on = false; startTimer(); return; }
   // eigener Zug
   $('#hud').classList.remove('wait');
   inp.on = true; inp.power = 0; inp.callManual = -1; setPowerUi(0);
@@ -270,16 +272,17 @@ function stopTimer() { if (M) clearInterval(M.tint); $('#timer').style.visibilit
 // Computer am Zug
 function botTurn() {
   inp.on = false; const g = M.game;
+  const start = () => {
+    if (!M || M.game !== g || g.phase === 'over') return;
+    const pick = botShot(g, M.level, M.rand);
+    const plan = botPlan(defaultAim(g), pick.ang, pick.power, M.level, M.rand);
+    botAim = { plan, t0: performance.now(), to: plan.ang, power: pick.power, call: pick.call, fired: false };
+  };
+  // Der Stab liegt sofort sichtbar am Tisch; mit freier Weißer wird erst platziert
   setTimeout(() => {
     if (!M || M.game !== g || g.phase === 'over') return;
-    if (g.inHand) { const p = botPlace(g, M.rand); const q = g.canPlace(p.x, p.y) ? p : g.nearestPlace(p.x, p.y); g.sim.put(0, q.x, q.y); scene.showSim(g.sim); }
-    setTimeout(() => {
-      if (!M || M.game !== g) return;
-      const pick = botShot(g, M.level, M.rand);
-      const ang0 = defaultAim(g);
-      botAim = { from: ang0, to: pick.ang, t0: performance.now(), dur: 900, power: pick.power, call: pick.call, fired: false };
-    }, 350);
-  }, 700);
+    if (g.inHand) { const p = botPlace(g, M.rand); const q = g.canPlace(p.x, p.y) ? p : g.nearestPlace(p.x, p.y); g.sim.put(0, q.x, q.y); scene.showSim(g.sim); setTimeout(start, 350 + M.rand() * 350); } else start();
+  }, g.inHand ? 600 + M.rand() * 600 : 120);
 }
 
 // Schuss auslösen (eigener Zug)
@@ -324,7 +327,7 @@ function runShot(seat, shot, call, info) {
   const res = g.shoot(shot, call, true);
   if (!res) { startTurn(); return; }
   scene.setHandMark(false); inp.on = false; $('#hint').textContent = '';
-  anim = { kind: 'cue', t0: performance.now(), res, seat, mine, call, ang: info.ang, power: info.power, a: info.a, b: info.b, pre, done: false };
+  anim = { kind: 'cue', t0: performance.now(), res, seat, mine, call, ang: info.ang, power: info.power, a: info.a, b: info.b, pull0: info.pull0 || 0, pre, done: false };
   scene.setPocketMarks(-1, false);
 }
 
@@ -523,7 +526,7 @@ function frame(now) {
   if (!M) { scene.render(); return; }
   const g = M.game;
   if (anim.kind === 'cue') {
-    const k = (now - anim.t0) / 1000, pullT = 0.26, strikeT = 0.09;
+    const k = (now - anim.t0) / 1000, pullT = anim.pull0 ? 0 : 0.26, strikeT = 0.09;
     const pull = k < pullT ? easeOut(k / pullT) * Math.max(0.15, anim.power) : Math.max(0, Math.max(0.15, anim.power) * (1 - (k - pullT) / strikeT));
     scene.setAim({ show: true, sim: preSim(anim), ang: anim.ang, info: aimInfo(preSim(anim), anim.ang), pull, spinA: anim.a, spinB: anim.b, guide: 0, cue: true });
     if (k >= pullT + strikeT) {
@@ -571,14 +574,14 @@ function drawAim(now) {
   if (!M || M.over) { scene.setAim(null); return; }
   const g = M.game;
   if (botAim) {
-    const k = Math.min(1, (now - botAim.t0) / botAim.dur), e = k * k * (3 - 2 * k);
-    const ang = botAim.from + (botAim.to - botAim.from) * e;
-    const pull = k > 0.7 ? Math.min(1, (k - 0.7) / 0.3) * botAim.power : 0;
-    scene.setAim({ show: true, sim: g.sim, ang, info: aimInfo(g.sim, ang), pull, spinA: 0, spinB: 0, guide: 0, cue: true });
-    if (k >= 1 && !botAim.fired) {
-      botAim.fired = true; const b = botAim; botAim = null;
+    const b = botAim, tt = (now - b.t0) / 1000, sm = samplePlan(b.plan, tt);
+    const trem = sm.done ? 0 : (0.0016 * Math.sin(tt * 2.3) + 0.0011 * Math.sin(tt * 5.1 + 1.3)) * (sm.pull > 0.05 ? 0.4 : 1); // leichtes Handzittern
+    const ang = sm.ang + trem;
+    scene.setAim({ show: true, sim: g.sim, ang, info: aimInfo(g.sim, ang), pull: sm.pull, spinA: 0, spinB: 0, guide: 0, cue: true });
+    if (sm.done && !b.fired) {
+      b.fired = true; botAim = null;
       const call = g.eightIsTarget() ? b.call : 0;
-      runShot(g.turn, cueShot(b.to, b.power, 0, 0), call, { ang: b.to, power: b.power, a: 0, b: 0 });
+      runShot(g.turn, cueShot(b.to, b.power, 0, 0), call, { ang: b.to, power: b.power, a: 0, b: 0, pull0: b.power });
     }
     return;
   }

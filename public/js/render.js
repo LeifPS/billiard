@@ -63,7 +63,7 @@ export class Scene3D {
     this.tableGroup = new THREE.Group(); this.scene.add(this.tableGroup);
     this.ballGroup = new THREE.Group(); this.scene.add(this.ballGroup);
     this.buildBalls(16);
-    this.buildGuides(); this.buildCue();
+    this.buildGuides(); this.buildCue(); this.buildCueFx();
     this.cos = null;
     this.trail = { items: [], n: 0, geo: new THREE.CircleGeometry(1.5, 14).rotateX(-Math.PI / 2), last: 0 };
     for (let i = 0; i < 90; i++) { const m = new THREE.Mesh(this.trail.geo, new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0, depthWrite: false })); m.visible = false; m.position.y = R * 2 + 0.3; this.scene.add(m); this.trail.items.push({ m, t0: -9, vx: 0, vz: 0 }); }
@@ -196,6 +196,67 @@ export class Scene3D {
     const c = find('cue', id), p = this.cueParts;
     p.shaft.material.color.set(c.a); p.butt.material.color.set(c.b); p.tip.material.color.set(c.t);
     this.cueRainbow = !!c.rainbow;
+    const F = this.fx; F.type = c.fx || null; if (c.glow) F.col.set(c.glow);
+    for (const m of [p.shaft, p.butt, p.tip]) { m.material.emissive.set(0x000000); m.material.emissiveIntensity = 1; }
+    F.tipGlow.visible = !!F.type; F.tipGlow.material.color.set(c.glow || '#ffffff'); F.aura.visible = !!F.type; F.aura.material.color.set(c.glow || '#ffffff');
+    if (!F.type) for (const q of F.items) { q.on = false; q.m.visible = false; }
+  }
+  // Leuchten und Funken der besonderen Stäbe
+  buildCueFx() {
+    const cv = document.createElement('canvas'); cv.width = cv.height = 64;
+    const x = cv.getContext('2d'), gr = x.createRadialGradient(32, 32, 0, 32, 32, 32);
+    gr.addColorStop(0, 'rgba(255,255,255,1)'); gr.addColorStop(0.35, 'rgba(255,255,255,0.55)'); gr.addColorStop(1, 'rgba(255,255,255,0)');
+    x.fillStyle = gr; x.fillRect(0, 0, 64, 64);
+    const map = new THREE.CanvasTexture(cv);
+    const mk = () => new THREE.Sprite(new THREE.SpriteMaterial({ map, transparent: true, opacity: 0, depthWrite: false, depthTest: false, blending: THREE.AdditiveBlending }));
+    const F = this.fx = { type: null, col: new THREE.Color('#ffffff'), items: [], acc: 0, tPrev: 0, tipGlow: mk() };
+    for (let i = 0; i < 80; i++) { const m = mk(); m.visible = false; m.renderOrder = 9; this.scene.add(m); F.items.push({ m, on: false, t0: 0, life: 1, vx: 0, vy: 0, vz: 0, s: 1, tw: 0, base: 1 }); }
+    // Lichtschein entlang des Stabs (breiter als der Stab selbst, damit man den Effekt von oben sieht)
+    const ac = document.createElement('canvas'); ac.width = 128; ac.height = 64; const ax = ac.getContext('2d');
+    const ag = ax.createLinearGradient(0, 0, 0, 64); ag.addColorStop(0, 'rgba(255,255,255,0)'); ag.addColorStop(0.5, 'rgba(255,255,255,0.95)'); ag.addColorStop(1, 'rgba(255,255,255,0)'); ax.fillStyle = ag; ax.fillRect(0, 0, 128, 64);
+    ax.globalCompositeOperation = 'destination-in'; const hg = ax.createLinearGradient(0, 0, 128, 0); hg.addColorStop(0, 'rgba(0,0,0,1)'); hg.addColorStop(1, 'rgba(0,0,0,0.08)'); ax.fillStyle = hg; ax.fillRect(0, 0, 128, 64);
+    F.aura = new THREE.Mesh(new THREE.PlaneGeometry(105, 6.5).rotateX(-Math.PI / 2).translate(52.5, -1.2, 0), new THREE.MeshBasicMaterial({ map: new THREE.CanvasTexture(ac), transparent: true, opacity: 0, depthWrite: false, blending: THREE.AdditiveBlending }));
+    F.aura.visible = false; F.aura.renderOrder = 8; this.cueGroup.add(F.aura);
+    F.tipGlow.position.set(0.3, 0, 0); F.tipGlow.visible = false; F.tipGlow.renderOrder = 9; this.cueGroup.add(F.tipGlow);
+  }
+  spawnFx(t) {
+    const F = this.fx, ty = F.type, g = this.cueGroup, a = this.cueAng || 0;
+    const q = F.items.find((i) => !i.on); if (!q) return;
+    const R_ = Math.random, dx = -Math.cos(a), dz = -Math.sin(a);
+    const span = ty === 'glut' ? 45 : ty === 'blitz' ? 35 : ty === 'frost' ? 100 : 120;
+    const u = R_() * span, px = g.position.x + dx * u, pz = g.position.z + dz * u, py = g.position.y + u * 0.07 + (R_() - 0.3) * 1.2;
+    q.on = true; q.t0 = t; q.m.visible = true; q.m.position.set(px, py, pz);
+    const c = q.m.material.color;
+    if (ty === 'glut') { q.life = 0.6 + R_() * 0.6; q.vx = (R_() - 0.5) * 6; q.vz = (R_() - 0.5) * 6; q.vy = 5 + R_() * 8; q.base = 1.4 + R_() * 1.4; c.setHSL(0.02 + R_() * 0.08, 1, 0.55 + R_() * 0.2); }
+    else if (ty === 'frost') { q.life = 1 + R_() * 0.7; q.vx = (R_() - 0.5) * 3; q.vz = (R_() - 0.5) * 3; q.vy = -(1 + R_() * 2); q.base = 1.3 + R_() * 1.2; q.tw = R_() * 6; c.setHSL(0.53 + R_() * 0.05, 0.8, 0.8); }
+    else if (ty === 'blitz') { q.life = 0.07 + R_() * 0.13; q.vx = (R_() - 0.5) * 70; q.vz = (R_() - 0.5) * 70; q.vy = (R_() - 0.3) * 40; q.base = 1.6 + R_() * 1.8; c.setHSL(0.14 + R_() * 0.03, 1, 0.75 + R_() * 0.2); }
+    else { q.life = 1.2 + R_() * 0.9; q.vx = (R_() - 0.5) * 1.5; q.vz = (R_() - 0.5) * 1.5; q.vy = (R_() - 0.5) * 1.5; q.base = 1.2 + R_() * 1.2; q.tw = R_() * 6; const pal = ['#ffffff', '#b48cff', '#7fb5ff', '#ff9be6']; c.set(pal[(R_() * 4) | 0]); }
+  }
+  updateCueFx(t) {
+    const F = this.fx, dt = Math.min(0.05, Math.max(0, t - F.tPrev)); F.tPrev = t;
+    const ty = F.type, p = this.cueParts, vis = this.cueGroup.visible && !!ty;
+    if (vis) {
+      const rate = { glut: 55, frost: 38, blitz: 34, galaxie: 24 }[ty] || 0; F.acc += rate * dt;
+      while (F.acc >= 1) { F.acc -= 1; this.spawnFx(t); }
+      // Leuchten am Stab und an der Spitze
+      const pu = 0.5 + 0.5 * Math.sin(t * 3.2), fl = Math.random();
+      let gi = 0.5, gs = 7;
+      if (ty === 'glut') { p.shaft.material.emissive.set('#ff4a10'); p.shaft.material.emissiveIntensity = 0.25 + 0.25 * pu; p.tip.material.emissive.set('#ff7a2a'); gi = 0.55 + 0.3 * fl; gs = 6 + fl * 2; }
+      else if (ty === 'frost') { p.shaft.material.emissive.set('#5ec8ff'); p.shaft.material.emissiveIntensity = 0.18 + 0.1 * pu; gi = 0.4 + 0.2 * pu; gs = 7; }
+      else if (ty === 'neon') { const h = 0.46 + 0.36 * (0.5 + 0.5 * Math.sin(t * 1.3)); p.shaft.material.emissive.setHSL(h, 1, 0.5); p.shaft.material.emissiveIntensity = 0.55 + 0.35 * pu; p.butt.material.emissive.setHSL((h + 0.12) % 1, 1, 0.5); p.butt.material.emissiveIntensity = 0.4 + 0.3 * (1 - pu); F.tipGlow.material.color.setHSL(h, 1, 0.6); gi = 0.7 + 0.25 * pu; gs = 8 + 2 * pu; }
+      else if (ty === 'blitz') { const on = fl > 0.55; p.shaft.material.emissive.set('#fff36b'); p.shaft.material.emissiveIntensity = on ? 0.6 : 0.08; gi = on ? 0.95 : 0.3; gs = on ? 9 : 5; }
+      else if (ty === 'galaxie') { p.butt.material.emissive.set('#6a3cff'); p.butt.material.emissiveIntensity = 0.25 + 0.2 * pu; p.shaft.material.emissive.set('#3a2a9a'); p.shaft.material.emissiveIntensity = 0.2 + 0.15 * (1 - pu); gi = 0.45 + 0.2 * pu; gs = 6; }
+      F.tipGlow.material.opacity = gi * 0.7; F.tipGlow.scale.setScalar(gs * 0.55); F.aura.material.opacity = ty === 'blitz' ? (gi > 0.6 ? 0.8 : 0.25) : ty === 'glut' ? 0.35 + 0.25 * pu + 0.1 * fl : ty === 'neon' ? 0.55 + 0.25 * pu : ty === 'frost' ? 0.4 + 0.15 * pu : 0.35 + 0.15 * pu; if (ty === 'neon') F.aura.material.color.copy(F.tipGlow.material.color);
+    } else { F.tipGlow.material.opacity = 0; F.aura.material.opacity = 0; }
+    for (const q of F.items) {
+      if (!q.on) continue;
+      const age = t - q.t0; if (age >= q.life) { q.on = false; q.m.visible = false; continue; }
+      const k = age / q.life; q.m.position.x += q.vx * dt; q.m.position.y += q.vy * dt; q.m.position.z += q.vz * dt;
+      let o = 1 - k;
+      if (F.type === 'frost' || F.type === 'galaxie') o = Math.sin(Math.PI * k) * (0.55 + 0.45 * Math.sin(age * 9 + q.tw));
+      else if (F.type === 'glut') o = (1 - k) * (0.7 + 0.3 * Math.random());
+      q.m.material.opacity = Math.max(0, o) * 0.95; q.m.scale.setScalar(q.base * (F.type === 'glut' ? 1 - 0.6 * k : 1));
+    }
   }
 
   // ---------------------------------------------------------------- Ansicht
@@ -297,7 +358,7 @@ export class Scene3D {
     // Queue
     const g = this.cueGroup; g.visible = a.cue !== false;
     if (a.cueId) this.applyCue(a.cueId);
-    const ang = a.ang, pull = a.pull || 0;
+    const ang = a.ang, pull = a.pull || 0; this.cueAng = ang;
     const right = { x: -Math.sin(ang), y: Math.cos(ang) };
     const ox = (a.spinA || 0) * 0.5 * R * right.x, oy = (a.spinA || 0) * 0.5 * R * right.y;
     const back = R + 1.2 + pull * 28;
@@ -310,5 +371,5 @@ export class Scene3D {
   }
   setHandMark(on, x, y, ok) { this.gHand.visible = on; if (on) { this.gHand.position.set(x, LH, y); this.gHand.material.color.set(ok ? 0x5dff9a : 0xff5d5d); } }
 
-  render() { this.updateTrail(performance.now() / 1000); this.renderer.render(this.scene, this.camera); }
+  render() { const tn = performance.now() / 1000; this.updateCueFx(tn); this.updateTrail(tn); this.renderer.render(this.scene, this.camera); }
 }
